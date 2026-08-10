@@ -40,6 +40,30 @@ func main() {
 - 演讲者备注：`slide.SetNotes("备注内容")`
 - 背景色：`slide.SetBgColor("#1e293b")`
 
+## 保真编辑（重要）
+
+打开已存在的 `.pptx` 时，`pptgo` 同样采用**保真编辑**策略：未修改的幻灯片母版、版式、主题与图片原样写回，仅替换目标文本节点。
+
+```go
+deck, _ := pptgo.OpenPPTX("deck.pptx")
+n := deck.ReplaceText("旧标题", "新标题")
+deck.SaveAs("deck-new.pptx")
+```
+
+## 旧版 .ppt 支持（只读）
+
+旧版二进制 `.ppt` 为 OLE2/CFB 复合文档，支持**只读**读取：
+
+```go
+d, _ := pptgo.OpenLegacy("old.ppt")
+for i := 0; i < d.SlideCount(); i++ {
+    text, _ := d.SlideText(i)
+    fmt.Println(text)
+}
+```
+
+> 设计约束：旧版 Office 文件仅支持读取，编辑请使用现代 `.pptx` 格式。
+
 ## 许可证
 
 MIT

@@ -133,7 +133,7 @@ func (p *Presentation) Bytes() ([]byte, error) {
         w := zip.NewWriter(buf)
 
         // [Content_Types].xml
-        writeFile(w, "[Content_Types].xml", contentTypesXML())
+        writeFile(w, "[Content_Types].xml", p.contentTypesXML())
 
         // _rels/.rels
         writeFile(w, "_rels/.rels", rootRelsXML)
@@ -147,29 +147,35 @@ func (p *Presentation) Bytes() ([]byte, error) {
         // ppt/_rels/presentation.xml.rels
         writeFile(w, "ppt/_rels/presentation.xml.rels", p.presRelsXML())
 
-        // 每张幻灯片
-        imgID := 0
-        for i, slide := range p.slides {
-                slideNum := i + 1
-                writeFile(w, fmt.Sprintf("ppt/slides/slide%d.xml", slideNum), slide.slideXML(slideNum))
+        // 幻灯片母版与版式。ECMA-376 要求每张幻灯片都必须经由版式关联到母版，
+        // 缺少这两个部件时 PowerPoint 会判定文件损坏并拒绝打开。
+        writeFile(w, "ppt/slideMasters/slideMaster1.xml", slideMasterXML)
+        writeFile(w, "ppt/slideMasters/_rels/slideMaster1.xml.rels", slideMasterRelsXML)
+        writeFile(w, "ppt/slideLayouts/slideLayout1.xml", slideLayoutXML)
+        writeFile(w, "ppt/slideLayouts/_rels/slideLayout1.xml.rels", slideLayoutRelsXML)
+        writeFile(w, "ppt/theme/theme1.xml", themeXML)
 
-                // 图片关系
-                hasImg := len(slide.images) > 0
-                if hasImg {
-                        writeFile(w, fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", slideNum), slide.slideRelsXML(slideNum))
-                        for _, img := range slide.images {
-                                imgID++
-                                imgPath := fmt.Sprintf("ppt/media/image%d.png", imgID)
-                                if len(img.data) > 0 {
-                                        writeFileBytes(w, imgPath, img.data)
-                                } else if img.path != "" {
-                                        data, err := os.ReadFile(img.path)
-                                        if err == nil {
-                                                writeFileBytes(w, imgPath, data)
-                                        }
-                                }
-                        }
-                }
+        // 每张幻灯片
+        for i, slide := range p.slides {
+        	slideNum := i + 1
+        	writeFile(w, fmt.Sprintf("ppt/slides/slide%d.xml", slideNum), slide.slideXML(slideNum))
+
+        	// 每张幻灯片都需要关系部件：至少要声明与版式的关联，有图片时再追加图片关系。
+        	writeFile(w, fmt.Sprintf("ppt/slides/_rels/slide%d.xml.rels", slideNum), slide.slideRelsXML(slideNum))
+
+        	for i2, img := range slide.images {
+        		// 图片编号规则必须与 slideRelsXML 中的引用保持一致，
+        		// 否则关系会指向不存在的部件。
+        		imgPath := fmt.Sprintf("ppt/media/image%d.png", imageNumber(slideNum, i2))
+        		if len(img.data) > 0 {
+        			writeFileBytes(w, imgPath, img.data)
+        		} else if img.path != "" {
+        			data, err := os.ReadFile(img.path)
+        			if err == nil {
+        				writeFileBytes(w, imgPath, data)
+        			}
+        		}
+        	}
         }
 
         if err := w.Close(); err != nil {
@@ -276,29 +282,36 @@ func (s *Slide) Bullets() []string { return s.bullets }
 // === XML 生成 ===
 
 func (p *Presentation) presentationXML() string {
-        var sb strings.Builder
-        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
 <p:sldIdLst>
 `)
-        for i := range p.slides {
-                sb.WriteString(fmt.Sprintf(`<p:sldId id="%d" r:id="rId%d"/>`, 256+i, i+2))
-        }
-        sb.WriteString(`</p:sldIdLst>
+	for i := range p.slides {
+		sb.WriteString(fmt.Sprintf(`<p:sldId id="%d" r:id="rId%d"/>`, 256+i, i+2))
+	}
+	sb.WriteString(`</p:sldIdLst>
+`)
+	// 幻灯片尺寸为必填项。此处采用 16:9 宽屏（12192000 x 6858000 EMU）。
+	sb.WriteString(`<p:sldSz cx="12192000" cy="6858000"/>
+<p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>`)
-        return sb.String()
+	return sb.String()
 }
 
 func (p *Presentation) presRelsXML() string {
-        var sb strings.Builder
-        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 `)
-        for i := range p.slides {
-                sb.WriteString(fmt.Sprintf(`<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide%d.xml"/>`, i+2, i+1))
-        }
-        sb.WriteString("</Relationships>")
-        return sb.String()
+	// rId1 固定指向母版，与 presentationXML 中的 sldMasterId 对应。
+	sb.WriteString(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>`)
+	for i := range p.slides {
+		sb.WriteString(fmt.Sprintf(`<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide%d.xml"/>`, i+2, i+1))
+	}
+	sb.WriteString("</Relationships>")
+	return sb.String()
 }
 
 func (p *Presentation) corePropsXML() string {
@@ -408,28 +421,50 @@ func (s *Slide) slideXML(num int) string {
         return sb.String()
 }
 
-func (s *Slide) slideRelsXML(num int) string {
-        var sb strings.Builder
-        sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-`)
-        for i := range s.images {
-                relID := fmt.Sprintf("rIdImg%d_%d", num, i+1)
-                sb.WriteString(fmt.Sprintf(`<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image%d.png"/>`, relID, num*100+i+1))
-        }
-        sb.WriteString("</Relationships>")
-        return sb.String()
+// imageNumber 返回某张幻灯片中第 idx 张图片的全局编号。
+// 生成图片部件和生成关系引用时都必须使用它，两处编号不一致会导致
+// 关系指向不存在的部件，PowerPoint 将拒绝打开文件。
+func imageNumber(slideNum, idx int) int {
+	return slideNum*100 + idx + 1
 }
 
-func contentTypesXML() string {
-        return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+func (s *Slide) slideRelsXML(num int) string {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+`)
+	// 与版式的关联是必需的，即使幻灯片本身没有任何图片。
+	sb.WriteString(`<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>`)
+	for i := range s.images {
+		relID := fmt.Sprintf("rIdImg%d_%d", num, i+1)
+		sb.WriteString(fmt.Sprintf(`<Relationship Id="%s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image%d.png"/>`, relID, imageNumber(num, i)))
+	}
+	sb.WriteString("</Relationships>")
+	return sb.String()
+}
+
+// contentTypesXML 生成内容类型清单。
+// 每一个 XML 部件都必须在此声明，未声明的部件会被 PowerPoint 忽略或判为损坏。
+func (p *Presentation) contentTypesXML() string {
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
-  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
-</Types>`
+  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+`)
+	for i := range p.slides {
+		sb.WriteString(fmt.Sprintf(`  <Override PartName="/ppt/slides/slide%d.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`+"\n", i+1))
+	}
+	sb.WriteString(`  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+</Types>`)
+	return sb.String()
 }
 
 const rootRelsXML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

@@ -42,6 +42,41 @@ func TestOpenPPTXRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSlideNotesExtracted 验证演讲者备注（notesSlide）能被读取，
+// 符合 LibreOffice 对 notesSlide 的处理范式。
+func TestSlideNotesExtracted(t *testing.T) {
+	p := New()
+	s := p.AddSlide()
+	s.SetTitleText("标题页面")
+	s.SetNotes("这是演讲者备注，不应出现在幻灯片正文里。")
+
+	data, err := p.Bytes()
+	if err != nil {
+		t.Fatalf("生成 pptx: %v", err)
+	}
+	deck, err := OpenPPTXBytes(data)
+	if err != nil {
+		t.Fatalf("OpenPPTXBytes: %v", err)
+	}
+	if deck.SlideCount() != 1 {
+		t.Fatalf("期望 1 张幻灯片，实际 %d", deck.SlideCount())
+	}
+	body, err := deck.SlideText(0)
+	if err != nil {
+		t.Fatalf("SlideText: %v", err)
+	}
+	if strings.Contains(body, "演讲者备注") {
+		t.Errorf("备注文本不应出现在正文里:\n%s", body)
+	}
+	notes, err := deck.SlideNotes(0)
+	if err != nil {
+		t.Fatalf("SlideNotes: %v", err)
+	}
+	if !strings.Contains(notes, "演讲者备注") {
+		t.Errorf("SlideNotes 未提取到备注，实际: %q", notes)
+	}
+}
+
 // TestSlideOrderIsNumeric 覆盖一个容易出错的细节：
 // 按字典序排序会把 slide10 排在 slide2 前面。
 func TestSlideOrderIsNumeric(t *testing.T) {

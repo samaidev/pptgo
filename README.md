@@ -62,6 +62,16 @@ for i := 0; i < d.SlideCount(); i++ {
 }
 ```
 
+## 只读读取（借鉴 LibreOffice OOXML 解析范式）
+
+`.pptx` 读取按 `sp`/`txBody`/`a:p`/`a:r`/`a:t` 分组提取文本，并支持演讲者备注：
+
+```go
+deck, _ := pptgo.OpenPPTX("deck.pptx")
+body, _ := deck.SlideText(0)    // 幻灯片正文（不含备注）
+notes, _ := deck.SlideNotes(0)  // 第 0 张幻灯片的演讲者备注
+```
+
 > 设计约束：旧版 Office 文件仅支持读取，编辑请使用现代 `.pptx` 格式。
 
 ## 许可证

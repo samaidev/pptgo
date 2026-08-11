@@ -30,10 +30,15 @@ type Deck struct {
 
 	// bodies 保存各幻灯片 XML 的当前内容，与 slideParts 一一对应。
 	bodies []string
+
+	// notesParts 是各备注页部件的路径，与 slideParts 按下标对应（缺失则为空）。
+	notesParts []string
 }
 
-// slideNumRe 用于从部件路径中提取幻灯片编号。
-var slideNumRe = regexp.MustCompile(`slide(\d+)\.xml$`)
+// slideNumRe 用于从部件路径中提取幻灯片/备注页编号。
+// 幻灯片部件为 slideN.xml（小写），备注页部件为 notesSlideN.xml（Notes 首字母大写），
+// 因此匹配需忽略大小写。
+var slideNumRe = regexp.MustCompile(`(?i)slide(\d+)\.xml$`)
 
 // OpenPPTX 以保真模式打开一个 .pptx 文件。
 func OpenPPTX(path string) (*Deck, error) {
@@ -79,7 +84,34 @@ func deckFromPackage(pkg *ooxml.Package) (*Deck, error) {
 		d.bodies = append(d.bodies, string(pkg.Part(p)))
 	}
 
+	// 备注页（notesSlides）：与幻灯片按编号一一对应。
+	// 部分演示文稿没有备注，缺失的幻灯片对应空字符串。
+	notesByNum := make(map[int]string)
+	for _, name := range pkg.NamesWithPrefix("ppt/notesSlides/") {
+		if strings.Contains(name, "/_rels/") || !strings.HasSuffix(name, ".xml") {
+			continue
+		}
+		notesByNum[slideNumOf(name)] = string(pkg.Part(name))
+	}
+	for _, p := range parts {
+		d.notesParts = append(d.notesParts, notesByNum[slideNumOf(p)])
+	}
+
 	return d, nil
+}
+
+// SlideNotes 返回第 index 张幻灯片的备注文本，下标从 0 开始。
+// 没有备注时返回空字符串。
+func (d *Deck) SlideNotes(index int) (string, error) {
+	if index < 0 || index >= len(d.slideParts) {
+		return "", fmt.Errorf("pptgo: 幻灯片下标 %d 越界（共 %d 张）", index, len(d.slideParts))
+	}
+	notes := d.notesParts[index]
+	if notes == "" {
+		return "", nil
+	}
+	blocks := ooxml.ExtractTextBlocks([]byte(notes), "p", "t")
+	return strings.Join(blocks, "\n"), nil
 }
 
 // slideNumOf 从部件路径中提取幻灯片编号，无法识别时返回 0。
@@ -125,6 +157,12 @@ func (d *Deck) Text() (string, error) {
 		}
 		sb.WriteString(text)
 		sb.WriteString("\n")
+		// 备注（notesSlide）一并输出，供全文检索使用。
+		if notes, _ := d.SlideNotes(i); notes != "" {
+			sb.WriteString("（备注）")
+			sb.WriteString(notes)
+			sb.WriteString("\n")
+		}
 	}
 	return sb.String(), nil
 }

@@ -176,6 +176,13 @@ func (p *Presentation) Bytes() ([]byte, error) {
         			}
         		}
         	}
+
+        	// 演讲者备注（notesSlide）：有备注内容时才生成对应部件，
+        	// 供读取端 SlideNotes 提取（与 LibreOffice 的 notesSlide 处理一致）。
+        	if strings.TrimSpace(slide.notes) != "" {
+        		writeFile(w, fmt.Sprintf("ppt/notesSlides/notesSlide%d.xml", slideNum), slide.notesSlideXML(slideNum))
+        		writeFile(w, fmt.Sprintf("ppt/notesSlides/_rels/notesSlide%d.xml.rels", slideNum), slide.notesSlideRelsXML(slideNum))
+        	}
         }
 
         if err := w.Close(); err != nil {
@@ -443,6 +450,29 @@ func (s *Slide) slideRelsXML(num int) string {
 	return sb.String()
 }
 
+// notesSlideXML 生成演讲者备注页部件。
+// 备注文本被写入 notesSlide 的独立 spTree 中，与幻灯片正文相互独立，
+// 这也是 LibreOffice / PowerPoint 区分「正文」与「备注」的方式。
+func (s *Slide) notesSlideXML(num int) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notesSlide xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<p:cSld>
+<p:spTree>
+<p:sp><p:nvSpPr><p:cNvPr id="1" name="Notes"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>%s</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree>
+</p:cSld>
+<p:clrMapOvr><a:overrideClrMapping/></p:clrMapOvr>
+</p:notesSlide>`, escapeXML(s.notes))
+}
+
+// notesSlideRelsXML 生成备注页的关系部件：指向对应的幻灯片。
+func (s *Slide) notesSlideRelsXML(num int) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="../slides/slide%d.xml"/>
+</Relationships>`, num)
+}
+
 // contentTypesXML 生成内容类型清单。
 // 每一个 XML 部件都必须在此声明，未声明的部件会被 PowerPoint 忽略或判为损坏。
 func (p *Presentation) contentTypesXML() string {
@@ -461,6 +491,9 @@ func (p *Presentation) contentTypesXML() string {
 `)
 	for i := range p.slides {
 		sb.WriteString(fmt.Sprintf(`  <Override PartName="/ppt/slides/slide%d.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`+"\n", i+1))
+		if strings.TrimSpace(p.slides[i].notes) != "" {
+			sb.WriteString(fmt.Sprintf(`  <Override PartName="/ppt/notesSlides/notesSlide%d.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`+"\n", i+1))
+		}
 	}
 	sb.WriteString(`  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 </Types>`)
